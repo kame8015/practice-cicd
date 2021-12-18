@@ -4,11 +4,12 @@ sudo su -
 
 cd /opt/app
 
-python --version
-which python
-which python3
+rm -rf .venv/
 
-python -m venv .venv
+python --version
+python3 --version
+
+python3 -m venv .venv
 source .venv/bin/acticate
 
 pip install -r requirements.txt
