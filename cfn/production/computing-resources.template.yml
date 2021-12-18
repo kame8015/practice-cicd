@@ -1,0 +1,150 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Computing Resources Template
+
+Parameters:
+  KeyName:
+    Description: input EC2 KeyName
+    Type: AWS::EC2::KeyPair::KeyName
+
+Resources:
+  # VPC
+  testVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: testVPC
+  # InternetGateway
+  testIGW:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: testIGW
+
+  # RouteTable
+  PublicRoute:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref testVPC
+      Tags:
+        - Key: Name
+          Value: PublicRoute
+
+  # Route
+  Route:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRoute
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref testIGW
+
+  # VPC Gateway Attachment
+  AttachIGW:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref testVPC
+      InternetGatewayId: !Ref testIGW
+
+  # Subnet
+  testSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      # AvailabilityZone: ap-northeast-1a
+      CidrBlock: 10.0.0.0/24
+      VpcId: !Ref testVPC
+      Tags:
+        - Key: Name
+          Value: testSubnet
+
+  # Subnet RouteTable Association
+  testSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRoute
+      SubnetId: !Ref testSubnet
+
+  # SecurityGroup
+  testSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref testVPC
+      GroupDescription: testIGW
+      SecurityGroupIngress:
+        # Ingress for connecting with ssh
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: testSG
+
+  # EC2 Instance
+  testEC2:
+    Type: AWS::EC2::Instance
+    Properties:
+      # AvailabilityZone: ap-northeast-1a
+      ImageId: ami-0abaa5b0faf689830  # Amazon Linux2 Latest
+      InstanceType: t2.micro
+      KeyName: !Ref KeyName
+      SubnetId: !Ref testSubnet
+      SecurityGroupIds:
+        - !Ref testSG
+      IamInstanceProfile: !Ref S3AccessInstanceProfile
+      Tags:
+        - Key: Name
+          Value: testEC2
+
+  # Elastic IP
+  testEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      InstanceId: !Ref testEC2
+
+  # IAM Role
+  S3AccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+
+  # IAM Policy
+  S3AccessPolicies:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: s3access
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:ListAllMyBuckets
+              - s3:GetBucketLocation
+            Resource: arn:aws:s3:::*
+          # Prefixにkameがつくものはフルアクセス
+          - Effect: Allow
+            Action:
+              - "*"
+            Resource:
+              - arn:aws:s3:::kame-*
+      Roles:
+        - !Ref S3AccessRole
+
+  # IAM Instance Profile
+  S3AccessInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref S3AccessRole
+      Path: /

@@ -1,0 +1,14 @@
+version: 0.0
+os: linux
+
+files:
+  - source: bin/
+    destination: /opt/app
+  - source: requirements.txt
+    destination: /opt/app
+  - source: hooks/
+    destination: /opt/app
+
+hooks:
+  AfterInstall:
+    - location: hooks/install_dependencies.sh
