@@ -1,8 +1,11 @@
 # !/bin/sh
 
-cd /var/app
+cd /opt/app
 
-deactivate
+python --version
+which python
+which python3
+
 python -m venv .venv
 source .venv/bin/acticate
 
