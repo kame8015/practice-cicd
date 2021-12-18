@@ -1,5 +1,7 @@
 # !/bin/sh
 
+sudo su -
+
 cd /opt/app
 
 python --version
