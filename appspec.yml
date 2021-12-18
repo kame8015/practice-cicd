@@ -7,7 +7,7 @@ files:
   - source: requirements.txt
     destination: /opt/app
   - source: hooks/
-    destination: /opt/app
+    destination: /opt/app/hooks
 
 hooks:
   AfterInstall:
