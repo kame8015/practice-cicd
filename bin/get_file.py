@@ -3,7 +3,7 @@ import boto3
 class FetchS3Object:
     def __init__(self, bucket_name: str) -> None:
         self.s3_client = boto3.client("s3")
-        bucket = self.s3_client.Bucket(bucket_name)
+        bucket = boto3.resource("s3").Bucket(bucket_name)
         self.bucket_name = bucket.name
 
     def fetch_objects(self, prefix: str = None):
