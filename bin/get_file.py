@@ -8,6 +8,7 @@ class FetchS3Object:
         self.bucket_name = bucket.name
 
     def fetch_objects(self):
+        ret_list = []
         next_token = ""
         while True:
             if next_token == "":
@@ -18,13 +19,17 @@ class FetchS3Object:
                 )
             for content in response["Contents"]:
                 key = content["Key"]
-                print(key)
+                ret_list.append(key)
             if "NextContinuationToken" in response:
                 next_token = response["NextContinuationToken"]
             else:
                 break
 
+        return ret_list
+
 
 if __name__ == "__main__":
     fetch_s3_objects = FetchS3Object("kame-practice-cicd")
-    fetch_s3_objects.fetch_objects()
+    ret_list = fetch_s3_objects.fetch_objects()
+    for file in ret_list:
+        print(file)
