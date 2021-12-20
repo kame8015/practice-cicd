@@ -171,15 +171,9 @@ Resources:
         Statement:
           - Effect: Allow
             Action:
-              - s3:ListAllMyBuckets
-              - s3:GetBucketLocation
-            Resource: arn:aws:s3:::*
-          # Prefixにkameがつくものはフルアクセス
-          - Effect: Allow
-            Action:
-              - "*"
-            Resource:
-              - arn:aws:s3:::kame-*
+              - s3:Get*
+              - s3:List*
+            Resource: "*"
       Roles:
         - !Ref S3AccessRole
 
