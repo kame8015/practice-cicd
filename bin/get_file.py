@@ -6,13 +6,13 @@ class FetchS3Object:
         bucket = boto3.resource("s3").Bucket(bucket_name)
         self.bucket_name = bucket.name
 
-    def fetch_objects(self, prefix: str = None):
+    def fetch_objects(self):
         next_token = ""
         while True:
             if next_token == "":
-                response = self.s3_client.list_objects_v2(Bucket=self.bucket_name, Prefix=prefix)
+                response = self.s3_client.list_objects_v2(Bucket=self.bucket_name)
             else:
-                response = self.s3_client.list_objects_v2(Bucket=self.bucket_name, Prefix=prefix, ContinuationToken=next_token)
+                response = self.s3_client.list_objects_v2(Bucket=self.bucket_name, ContinuationToken=next_token)
             for content in response["Contents"]:
                 key = content["Key"]
                 prt = key.split("/")
