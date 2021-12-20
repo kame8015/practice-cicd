@@ -1,0 +1,237 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: CodePipeline/CodeDeploy Template
+
+Parameters:
+  ApplicationName:
+    Description: CodePipeline/CodeDeploy ApplicationName
+    Type: String
+
+  GitHubOwner:
+    Description: GitHub Owner
+    Type: String
+
+  GitHubRepositoryName:
+    Description: GitHub Repository Name
+    Type: String
+
+  GitHubBranchName:
+    Description: GitHub Target Branch Name
+    Type: String
+
+  GitHubOAuthToken:
+    Description: GitHub OAuth Token
+    Type: String
+    NoEcho: true
+
+  Ec2InstanceName:
+    Description: EC2 Instance Name
+    Type: String
+
+Resources:
+  # S3 ArtifactStore Bucket
+  ArtifactStoreBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+
+  # S3 CodeBuild Bucket
+  CodeBuildBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+
+  # IAM CodeDeployServiceRole
+  CodeDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codedeploy.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole
+
+  # IAM CodeBuildRole
+  # CodeBuildRole:
+  #   Type: AWS::IAM::Role
+  #   Properties:
+  #     AssumeRolePolicyDocument:
+  #       Version: 2012-10-17
+  #       Statement:
+  #         - Effect: Allow
+  #           Principal:
+  #             Service: codebuild.amazonaws.com
+  #           Action: sts:AssumeRole
+  #     Path: /
+  #     Policies:
+  #       - PolicyName: CodeBuildAccess
+  #         PolicyDocument:
+  #           Version: 2012-10-17
+  #           Statement:
+  #             - Sid: S3Access
+  #               Effect: Allow
+  #               Action:
+  #                 - s3:PutObject
+  #                 - s3:GetObject
+  #                 - s3:GetObjectVersion
+  #               Resource:
+  #                 - !Sub arn:aws:s3:::${ArtifactStoreBucket}
+  #                 - !Sub arn:aws:s3:::${ArtifactStoreBucket}/*
+  #                 - !Sub arn:aws:s3:::${CodeBuildBucket}
+  #                 - !Sub arn:aws:s3:::${CodeBuildBucket}/*
+
+  # CodeBuild Project
+  # CodeBuildProject:
+  #   Type: AWS::CodeBuild::Project
+  #   Properties:
+  #     ServiceRole: !GetAtt CodeBuildRole.Arn
+  #     Artifacts:
+  #       Type: CODEPIPELINE
+  #     Environment:
+  #       Type: LINUX_CONTAINER
+  #       Image: aws/codebuild/ubuntu-base:14.04
+  #       ComputeType: BUILD_GENERAL1_SMALL
+  #       EnvironmentVariables:
+  #         - Name: AWS_REGION
+  #           Value: !Ref AWS::Region
+  #         - Name: S3_BUCKET
+  #           Value: !Ref CodeBuildBucket
+  #     Source:
+  #       Type: CODEPIPELINE
+
+  # CodeDeploy Application
+  CodeDeployApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: !Ref ApplicationName
+
+  # CodeDeploy DeploymentGroup
+  CodeDeployGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref CodeDeployApplication
+      ServiceRoleArn: !GetAtt CodeDeployRole.Arn
+      DeploymentGroupName: !Ref ApplicationName
+      DeploymentConfigName: CodeDeployDefault.OneAtATime
+      Ec2TagFilters:
+        - Type: KEY_AND_VALUE
+          Key: Name
+          Value: !Ref Ec2InstanceName
+
+  # CodePipeline Role
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: CodePipelineAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: S3FullAccess
+                Effect: Allow
+                Action: s3:*
+                Resource:
+                  - !Sub arn:aws:s3:::${ArtifactStoreBucket}
+                  - !Sub arn:aws:s3:::${ArtifactStoreBucket}/*
+              - Sid: FullAccess
+                Effect: Allow
+                Action:
+                  - cloudformation:*
+                  - codedeploy:CreateDeployment
+                  - codedeploy:GetApplicationRevision
+                  - codedeploy:GetDeployment
+                  - codedeploy:GetDeploymentConfig
+                  - codedeploy:RegisterApplicationRevision
+                  - iam:PassRole
+                Resource: "*"
+              # - Sid: SNSPublishAccess
+              #   Effect: Allow
+              #   Action: sns:Publish
+              #   Resource: !Ref CodePipelineSNSTopic
+              # - Sid: CodeBuildAccess
+              #   Effect: Allow
+              #   Action:
+              #     - codebuild:BatchGetBuilds
+              #     - codebuild:StartBuild
+              #   Resource: !GetAtt CodeBuildProject.Arn
+
+  # CodePipeline Pipeline
+  DeployPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub ${ApplicationName}-pipeline
+      RoleArn: !GetAtt PipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactStoreBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: download-source
+              RunOrder: 1
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Provider: GitHub
+                Version: 1
+              Configuration:
+                Owner: !Ref GitHubOwner
+                Repo: !Ref GitHubRepositoryName
+                Branch: !Ref GitHubBranchName
+                OAuthToken: !Ref GitHubOAuthToken
+              OutputArtifacts:
+                - Name: SourceOutput
+
+        # - Name: Test
+        #   Actions:
+        #     - Name: testing
+        #       RunOrder: 1
+        #       ActionTypeId:
+        #         Category: Test
+        #         Owner: AWS
+        #         Provider: CodeBuild
+        #         Version: 1
+        #       Configuration:
+        #         ProjectName: !Ref CodeBuildProject
+        #       InputArtifacts:
+        #       - Name: SourceOutput
+        #       OutputArtifacts:
+        #         - Name: TestOutput
+
+        - Name: Approval
+          Actions:
+            - Name: approve-deployment
+              ActionTypeId:
+                Category: Approval
+                Owner: AWS
+                Provider: Manual
+                Version: 1
+
+        - Name: Deploy
+          Actions:
+            - Name: deployment
+              RunOrder: 1
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CodeDeploy
+                Version: 1
+              Configuration:
+                ApplicationName: !Ref CodeDeployApplication
+                DeploymentGroupName: !Ref CodeDeployGroup
+              InputArtifacts:
+                - Name: SourceOutput
