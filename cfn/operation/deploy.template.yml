@@ -117,6 +117,12 @@ Resources:
     Properties:
       ApplicationName: !Ref CodeDeployApplication
       ServiceRoleArn: !GetAtt CodeDeployRole.Arn
+      AutoRollbackConfiguration:
+        Enabled: true
+        Events:
+          - DEPLOYMENT_FAILURE
+          - DEPLOYMENT_STOP_ON_ALARM
+          - DEPLOYMENT_STOP_ON_REQUEST
       DeploymentGroupName: !Ref ApplicationName
       DeploymentConfigName: CodeDeployDefault.OneAtATime
       Ec2TagFilters:
