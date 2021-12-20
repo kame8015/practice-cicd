@@ -1,10 +1,10 @@
-# !/bin/sh
+#!/bin/sh
 
 sudo su -
 
-source ~/.bashrc
-
 cd /opt/app
+
+source ~/.bashrc
 
 rm -rf .venv/
 
