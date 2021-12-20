@@ -156,6 +156,8 @@ Resources:
                   - codedeploy:GetDeployment
                   - codedeploy:GetDeploymentConfig
                   - codedeploy:RegisterApplicationRevision
+                  - s3:GetBucketLocation
+                  - s3:ListAllMyBuckets
                   - iam:PassRole
                 Resource: "*"
               # - Sid: SNSPublishAccess
