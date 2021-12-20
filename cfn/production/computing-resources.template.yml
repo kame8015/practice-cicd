@@ -173,7 +173,12 @@ Resources:
             Action:
               - s3:Get*
               - s3:List*
-            Resource: "*"
+            Resource: "arn:aws:s3:::deploy-stack-*"
+          - Effect: Allow
+            Action:
+              - s3:Get*
+              - s3:List*
+            Resource: "arn:aws:s3:::kame-"
       Roles:
         - !Ref S3AccessRole
 

@@ -10,5 +10,7 @@ files:
     destination: /opt/app/hooks
 
 hooks:
+  BeforeInstall:
+    - location: hooks/cleanup_application.sh
   AfterInstall:
     - location: hooks/install_dependencies.sh
