@@ -15,8 +15,7 @@ class FetchS3Object:
                 response = self.s3_client.list_objects_v2(Bucket=self.bucket_name, ContinuationToken=next_token)
             for content in response["Contents"]:
                 key = content["Key"]
-                prt = key.split("/")
-                print(prt)
+                print(key)
             if "NextContinuationToken" in response:
                 next_token = response["NextContinuationToken"]
             else:
