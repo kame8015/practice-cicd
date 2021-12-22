@@ -150,10 +150,14 @@ Resources:
                   tag (str): AMI tag of EC2 Instance
               """
               tag = None
-              tags = ec2_client.describe_instances(InstanceIds=[instance_id])
-              for tag in tags["Reservations"][0]["Instances"][0]["Tags"]:
-                  if tag["Key"] == "Name":
-                      tag = tag["Value"]
+              # tags = ec2_client.describe_instances(InstanceIds=[instance_id])
+              # for tag in tags["Reservations"][0]["Instances"][0]["Tags"]:
+              #     if tag["Key"] == "Name":
+              #         tag = tag["Value"]
+
+              instance = ec2_resource.Instance(id=instance_id)
+              name_tag = [x["Value"] for x in instance.tags if x["Key"] == "Name"]
+              tag = name_tag[0] if len(name_tag) else ""
 
               return tag
 
