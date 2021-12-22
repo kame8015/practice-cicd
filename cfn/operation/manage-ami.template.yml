@@ -1,0 +1,287 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Manage AMI Lambda Template
+
+Resources:
+  # IAM Role for Lambda
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: LambdaAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: CodePipelineFullAccess
+                Effect: Allow
+                Action:
+                  - codepipeline:*
+                Resource: "*"
+              - Sid: EC2Access
+                Effect: Allow
+                Action:
+                  - ec2:CreateImage
+                  - ec2:DeregisterImage
+                  - ec2:DescribeInstances
+                  - ec2:DescribeImages
+                  - logs:PutLogEvents
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - cloudformation:DescribeStacks
+                  - cloudformation:UpdateStack
+                  - iam:GetRole
+                  - iam:PassRole
+                Resource: "*"
+
+  # Lambda Function
+  ManageAMIFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Role: !GetAtt ExecutionRole.Arn
+      Description: Manage AMI Lambda Function template
+      FunctionName: ManageAMI
+      Handler: index.lambda_handler
+      Runtime: python3.9
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          from typing import Optional
+          from datetime import datetime
+
+          cp_client = boto3.client("codepipeline")
+          ec2_client = boto3.client("ec2")
+          ec2_resource = boto3.resource("ec2")
+          # cf_resource = boto3.resource("cloudformation")
+          # stack = cf_resource.Stack("deploy-stack")
+
+
+          def put_job_success(job_id: str, image_id: str = None) -> None:
+              """CodePipelineのジョブへ成功を返す.
+
+              Args:
+                  job_id (str): CodePipeline Job ID
+                  image_id (Optional[str]): Output image_id for CodePipeline
+              Returns:
+                  None
+              """
+              if image_id:
+                  cp_client.put_job_success_result(
+                      jobId=job_id,
+                      outputVariables={"IMAGE_ID": image_id}
+                  )
+              else:
+                  cp_client.put_job_success_result(jobId=job_id)
+              print("------ Pipeline Job Success ------")
+              print(f"Job ID: {job_id}")
+              return None
+
+
+          def put_job_failure(job_id: str, err: Exception) -> None:
+              """CodePipelineのジョブへ失敗を返す.
+
+              Args:
+                  job_id (str): CodePipeline Job ID
+                  err (Exception): Error Details
+
+              Returns:
+                  None
+              """
+              message = f"Function exception: {err}"
+              cp_client.put_job_failure_result(
+                  jobId=job_id, failureDetails={"type": "JobFailed", "message": message}
+              )
+              print("------  Pipeline Job Failure ------")
+              print(f"Job ID: {job_id}")
+              return None
+
+
+          def continue_job_later(job_id: str, message: str) -> None:
+              """CodePipelineにジョブ継続を通知.
+
+              Args:
+                  job_id (str): CodePipeline Job ID
+                  message: A message to be logged relating to the job status
+
+              Returns:
+                  None
+              """
+              continuation_token = json.dumps({"previous_job_id": job_id})
+
+              print("Putting job continue.")
+              print(message)
+              cp_client.put_job_success_result(jobId=job_id, continuationToken=continuation_token)
+
+
+          def create_ami(prefix: str, instance_id: str) -> str:
+              """EC2インスタンスからAMIを作成する.
+
+              Args:
+                  prefix (str): Prefix of AMI
+                  instance_id (str): EC2 Instance ID
+              """
+              image_name = "_".join([prefix, datetime.now().strftime("%Y%m%d-%H%M%S")])
+
+              response = ec2_client.create_image(
+                  InstanceId=instance_id,
+                  Name=image_name,
+                  Description="Created automatically by Lambda for Backup",
+                  NoReboot=True,
+              )
+              return response["ImageId"]
+
+
+          def generate_tag(instance_id: str) -> Optional[str]:
+              """AMIに付与するタグを生成する.
+
+              Args:
+                  instance_id (str): EC2 Instance ID
+
+              Returns:
+                  tag (str): AMI tag of EC2 Instance
+              """
+              tag = None
+              tags = ec2_client.describe_instances(InstanceIds=[instance_id])
+              for tag in tags["Reservations"][0]["Instances"][0]["Tags"]:
+                  if tag["Key"] == "Name":
+                      tag = tag["Value"]
+
+              return tag
+
+
+          def overrides_parameter(image_id: str):
+            """バックアップAMIのIDをデプロイスタックパラメータに上書きする.
+
+            Args:
+                  image_id (str): AMI ID for backup
+            Returns:
+                  were_updates
+            """
+            were_updates = stack.update(
+                UsePreviousTemplate=True,
+                Parameters=[
+                    {
+                        "ParameterKey": "ApplicationName",
+                        "UsePreviousValue": True
+                    },
+                    {
+                        "ParameterKey": "BackupImageId",
+                        "ParameterValue": image_id
+                    },
+                    {
+                        "ParameterKey": "Ec2InstanceId",
+                        "UsePreviousValue": True
+                    },
+                    {
+                        "ParameterKey": "Ec2InstanceName",
+                        "UsePreviousValue": True
+                    },
+                    {
+                        "ParameterKey": "GitHubBranchName",
+                        "UsePreviousValue": True
+                    },
+                    {
+                        "ParameterKey": "GitHubOAuthToken",
+                        "UsePreviousValue": True
+                    },
+                    {
+                        "ParameterKey": "GitHubOwner",
+                        "UsePreviousValue": True
+                    },
+                    {
+                        "ParameterKey": "GitHubRepositoryName",
+                        "UsePreviousValue": True
+                    }
+                ],
+                Capabilities=["CAPABILITY_IAM"]
+            )
+
+            return were_updates
+
+
+          def delete_ami(image_id: str) -> None:
+              """指定されたAMIを削除する.
+
+              Args:
+                  image_id (str): AMI ID
+              """
+              print(f"[DELETE] ImageId: {image_id}")
+              ec2_resource.Image(image_id).deregister()
+              print("Image Deleted.")
+              return None
+
+
+          def check_status_update_status(job_id):
+              status = stack.stack_status
+              if status in ["UPDATE_COMPLETE", "CREATE_COMPLETE"]:
+                  put_job_success(job_id)
+              elif status in ["UPDATE_IN_PROGRESS", "UPDATE_ROLLBACK_IN_PROGRESS", "UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS", "CREATE_IN_PROGRESS", "ROLLBACK_IN_PROGRESS"]:
+                  continue_job_later(job_id, "Stack update still in progress!")
+
+
+          def lambda_handler(event, context):
+              try:
+                  job_id = event["CodePipeline.job"]["id"]
+                  job_data = event["CodePipeline.job"]["data"]
+
+                  user_parameters = json.loads(
+                      job_data["actionConfiguration"]["configuration"]["UserParameters"]
+                  )
+
+                  pipeline_name = user_parameters["PipelineName"]
+                  usage = user_parameters["Usage"]
+
+                  print(f"[START] PipelineName: {pipeline_name}")
+                  if usage == "create":
+                      instance_id = user_parameters["InstanceId"]
+                      print(f"[CREATE] InstanceId: {instance_id}")
+                      prefix = generate_tag(instance_id)
+                      if prefix is None:
+                          raise Exception("Cannot generate prefix.")
+                      image_id = create_ami(prefix, instance_id)
+                      put_job_success(job_id, image_id)
+
+                  elif usage == "delete":
+                      image_id = user_parameters["ImageId"]
+                      print(f"[DELETE] ImageId: {image_id}")
+                      delete_ami(image_id)
+                      put_job_success(job_id)
+
+                  else:
+                      raise Exception(f"Invalid Usage: {usage}")
+
+                  print(f"[FINISH] PipelineName: {pipeline_name}")
+
+                  # if "continuationToken" in job_data:
+                  #     # If we're continuing then the create/update has already been triggered
+                  #     # we just need to check if it has finished.
+                  #     check_status_update_status(job_id)
+
+                  # put_job_success(job_id)
+
+              except Exception as e:
+                  put_job_failure(job_id, e)
+
+              return "Complete."
+
+  ManageAMIFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 30
+      LogGroupName: /aws/lambda/ManageAMI
+
+Outputs:
+  ManageAMIFunctionName:
+    Description: Lambda Function Name for Management AMI
+    Export:
+      Name: ManageAMIFunction
+    Value: !Ref ManageAMIFunction

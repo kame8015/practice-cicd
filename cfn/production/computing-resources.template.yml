@@ -173,12 +173,7 @@ Resources:
             Action:
               - s3:Get*
               - s3:List*
-            Resource: "arn:aws:s3:::deploy-stack-*"
-          - Effect: Allow
-            Action:
-              - s3:Get*
-              - s3:List*
-            Resource: "arn:aws:s3:::kame-"
+            Resource: "*"
       Roles:
         - !Ref S3AccessRole
 
@@ -189,3 +184,10 @@ Resources:
       Roles:
         - !Ref S3AccessRole
       Path: /
+
+Outputs:
+  Ec2InstanceId:
+    Description: EC2 Instance ID
+    Export:
+      Name: Ec2InstanceId
+    Value: !Ref testEC2

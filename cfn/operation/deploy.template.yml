@@ -27,6 +27,14 @@ Parameters:
     Description: EC2 Instance Name
     Type: String
 
+  BackupImageId:
+    Description: Backup EC2 AMI
+    Type: String
+
+  Ec2InstanceId:
+    Description: EC2 Instance ID
+    Type: AWS::EC2::Instance::Id
+
 Resources:
   # S3 ArtifactStore Bucket
   ArtifactStoreBucket:
@@ -53,7 +61,8 @@ Resources:
             Principal:
               Service:
                 - codedeploy.amazonaws.com
-            Action: sts:AssumeRole
+            Action:
+              - sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole
 
@@ -139,7 +148,9 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              Service: codepipeline.amazonaws.com
+              Service:
+                - codepipeline.amazonaws.com
+                - cloudformation.amazonaws.com
             Action: sts:AssumeRole
       Path: /
       Policies:
@@ -164,6 +175,8 @@ Resources:
                   - codedeploy:RegisterApplicationRevision
                   - s3:GetBucketLocation
                   - s3:ListAllMyBuckets
+                  - lambda:InvokeFunction
+                  - lambda:ListFunctions
                   - iam:PassRole
                 Resource: "*"
               # - Sid: SNSPublishAccess
@@ -189,7 +202,7 @@ Resources:
       Stages:
         - Name: Source
           Actions:
-            - Name: download-source
+            - Name: downloadSource
               RunOrder: 1
               ActionTypeId:
                 Category: Source
@@ -222,12 +235,26 @@ Resources:
 
         - Name: Approval
           Actions:
-            - Name: approve-deployment
+            - Name: approveDeployment
               ActionTypeId:
                 Category: Approval
                 Owner: AWS
                 Provider: Manual
                 Version: 1
+
+        - Name: Backup
+          Actions:
+            - Name: backup
+              RunOrder: 1
+              Namespace: EnvParam
+              ActionTypeId:
+                Category: Invoke
+                Owner: AWS
+                Provider: Lambda
+                Version: 1
+              Configuration:
+                FunctionName: !ImportValue ManageAMIFunction
+                UserParameters: !Sub '{"PipelineName": "${ApplicationName}-pipeline", "Usage": "create", "InstanceId": "${Ec2InstanceId}"}'
 
         - Name: Deploy
           Actions:
@@ -243,3 +270,40 @@ Resources:
                 DeploymentGroupName: !Ref CodeDeployGroup
               InputArtifacts:
                 - Name: SourceOutput
+
+        - Name: Cleanup
+          Actions:
+            - Name: cleanup
+              RunOrder: 1
+              ActionTypeId:
+                Category: Invoke
+                Owner: AWS
+                Provider: Lambda
+                Version: 1
+              Configuration:
+                FunctionName: !ImportValue ManageAMIFunction
+                UserParameters: !Sub '{"PipelineName": "${ApplicationName}-pipeline", "Usage": "delete", "ImageId": "${BackupImageId}"}'
+            # - Name: changeParameter
+            #   RunOrder: 2
+            #   InputArtifacts:
+            #     - Name: SourceOutput
+            #   ActionTypeId:
+            #     Category: Deploy
+            #     Owner: AWS
+            #     Provider: CloudFormation
+            #     Version: 1
+            #   Configuration:
+            #     ActionMode: CREATE_UPDATE
+            #     StackName: !Ref AWS::StackName
+            #     RoleArn: !GetAtt PipelineRole.Arn
+            #     TemplatePath: SourceOutput::cfn/operation/deploy.template.yml
+            #     ParameterOverrides: !Sub |
+            #       {
+            #         "ApplicationName": "${ApplicationName}",
+            #         "BackupImageId": "#{EnvParam.IMAGE_ID}",
+            #         "Ec2InstanceName": "${Ec2InstanceName}",
+            #         "GitHubRepositoryName": "${GitHubRepositoryName}",
+            #         "GitHubOwner": "${GitHubOwner}",
+            #         "GitHubOAuthToken": "${GitHubOAuthToken}",
+            #         "GitHubBranchName": "${GitHubBranchName}"
+            #       }
