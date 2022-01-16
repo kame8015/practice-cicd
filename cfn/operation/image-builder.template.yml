@@ -1,0 +1,232 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: EC2 Image Builder Template
+
+Parameters:
+  KeyName:
+    Description: EC2 KeyName which you made for connecting with ssh
+    Type: AWS::EC2::KeyPair::KeyName
+
+Resources:
+  # IAM
+  # ImageBuilder が必須とする権限である
+  #  - AmazonSSMManagedInstanceCore
+  #  - EC2InstanceProfileForImageBuilder
+  # を利用する
+  Ec2IAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+              Action:
+                - sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/EC2InstanceProfileForImageBuilder
+
+  Ec2RolePolicies:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: Ec2RolePolicies
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:List*
+            Resource:
+              - "*"
+          - Effect: Allow
+            Action:
+              - s3:*
+            Resource:
+              - !Sub arn:aws:s3:::${S3BucketLog}
+              - !Sub arn:aws:s3:::${S3BucketLog}/*
+      Roles:
+        - !Ref Ec2IAMRole
+
+  Ec2IAMProfile:
+    Type: AWS::IAM::InstanceProfile
+    # DependsOn: Ec2IAMRole  # !Ref を使用していれば DependsOn は不要
+    Properties:
+      Path: /
+      Roles:
+        - !Ref Ec2IAMRole
+
+  # S3
+  # Image Builder のログ出力先として利用する
+  # AMI 作成時、System Manager「aws:runCommand」のログ出力先
+  S3BucketLog:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-log-${AWS::Region}-${AWS::AccountId}
+      LifecycleConfiguration:
+        Rules:
+          - Id: AutoDelete
+            Status: Enabled
+            ExpirationInDays: 14
+
+  # Image Builder
+  # BuildComponent
+  BuildComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: !Sub ${AWS::StackName}-build
+      Version: 1.0.0
+      Platform: Linux
+      Data: |
+        name: yum_install
+        description: jq_install
+        schemaVersion: 1.0
+        phases:
+          - name: build
+            steps:
+              - name: UpdateOS
+                action: UpdateOS
+              - name: yun_update
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - yum update -y
+              - name: jq_install
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - yum install jq -y
+              - name: kernel_ng_install
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - amazon-linux-extras install -y kernel-ng
+          - name: validate
+            steps:
+              - name: jq_install
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - rpm -qi jq
+
+  # TestComponent
+  # 指定したコマンドの実行結果 $? の値が 0 以外である場合異常とみなす
+  TestComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: !Sub ${AWS::StackName}-test
+      Version: 1.0.0
+      Platform: Linux
+      Data: |
+        name: jq_test
+        description: jq_test
+        schemaVersion: 1.0
+        phases:
+          - name: test
+            steps:
+              - name: check_status
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - jq --version
+
+  # ImageRecipe
+  # ビルド用とテスト用のコンポーネントを登録
+  # 利用する AMI は imagebuilder に登録された Amazon Linux 2 の最新
+  ImageRecipe:
+    Type: AWS::ImageBuilder::ImageRecipe
+    Properties:
+      Name: !Sub ${AWS::StackName}-Recipe
+      Version: 1.0.0
+      ParentImage: !Sub arn:aws:imagebuilder:${AWS::Region}:aws:image/amazon-linux-2-x86/x.x.x
+      Components:
+        - ComponentArn: !Ref BuildComponent
+        - ComponentArn: !Ref TestComponent
+
+  # InfrastructureConfiguration
+  # VPC や SecurityGroup は AMI 作成に使用
+  InfrastructureConfiguration:
+    Type: AWS::ImageBuilder::InfrastructureConfiguration
+    Properties:
+      Name: !Sub ${AWS::StackName}-InfrastructureConfiguration
+      InstanceProfileName: !Ref Ec2IAMProfile
+      InstanceTypes:
+        - t2.micro
+      SecurityGroupIds:
+        - !ImportValue SecurityGroupId
+      SubnetId: !ImportValue SubnetId
+      TerminateInstanceOnFailure: true
+      ResourceTags:
+        - Key: Name
+          Value: testEC2
+      Logging:
+        S3Logs:
+          S3BucketName: !Ref S3BucketLog
+          S3KeyPrefix: !Sub ${AWS::StackName}
+
+  # Image
+  # ImageRecipe を利用して AMI を作成する指定
+  Image:
+    Type: AWS::ImageBuilder::Image
+    Properties:
+      ImageRecipeArn: !Ref ImageRecipe
+      InfrastructureConfigurationArn: !Ref InfrastructureConfiguration
+      ImageTestsConfiguration:
+        ImageTestsEnabled: true
+        TimeoutMinutes: 60
+
+  # SSM
+  # AMI ID を取得し、パラメータストアに「aws:ec2:image」として登録
+  Parameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      DataType: aws:ec2:image
+      Name: !Sub ${AWS::StackName}-ami-id
+      Type: String
+      Value: !GetAtt Image.ImageId
+      Description: !Sub ${AWS::StackName}-ami-id
+
+  # LaunchTemplate
+  Ec2LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub ${AWS::StackName}-launch-template
+      LaunchTemplateData:
+        BlockDeviceMappings:
+          - Ebs:
+              VolumeSize: 8
+              VolumeType: gp2
+            DeviceName: /dev/xvda
+        SecurityGroupIds:
+          - !ImportValue SecurityGroupId
+        ImageId: !Sub "{{resolve:ssm:${Parameter}:1}}"
+        InstanceType: t2.micro
+        KeyName: !Ref KeyName
+      # LaunchTemplateData:
+      #   IamInstanceProfile:
+      #     Arn: !GetAtt Ec2IAMProfile.Arn
+      #   ImageId: !Sub {{resolve:ssm:${Parameter}:1}}
+      #   InstanceType: t2.micro
+      #   KeyName: !Ref KeyName
+
+  # AutoScalingGroup
+  # ImageBuilder で作成した AMI を利用して、EC2 インスタンスを1台起動する
+  Ec2AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub ${AWS::StackName}-asg
+      LaunchTemplate:
+        LaunchTemplateId: !Ref Ec2LaunchTemplate
+        Version: !GetAtt Ec2LaunchTemplate.LatestVersionNumber
+      VPCZoneIdentifier:
+        - !ImportValue testSubnet
+      # AvailabilityZones:  # 指定しない
+      DesiredCapacity: 1  # 希望数
+      MinSize: 0  # 最小数
+      MaxSize: 1  # 最大数
+      HealthCheckType: EC2
+      Tags:
+        - Key: Name
+          Value: testEC2
+          PropagateAtLaunch: true

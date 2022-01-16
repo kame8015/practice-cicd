@@ -1,10 +1,10 @@
 AWSTemplateFormatVersion: 2010-09-09
 Description: Computing Resources Template
 
-Parameters:
-  KeyName:
-    Description: input EC2 KeyName
-    Type: AWS::EC2::KeyPair::KeyName
+# Parameters:
+  # KeyName:
+  #   Description: input EC2 KeyName
+  #   Type: AWS::EC2::KeyPair::KeyName
 
 Resources:
   # VPC
@@ -83,68 +83,68 @@ Resources:
           Value: testSG
 
   # EC2 Instance
-  testEC2:
-    Type: AWS::EC2::Instance
-    Properties:
-      # AvailabilityZone: ap-northeast-1a
-      ImageId: ami-0abaa5b0faf689830  # Amazon Linux2 Latest
-      InstanceType: t2.micro
-      KeyName: !Ref KeyName
-      SubnetId: !Ref testSubnet
-      SecurityGroupIds:
-        - !Ref testSG
-      IamInstanceProfile: !Ref S3AccessInstanceProfile
-      UserData:
-        Fn::Base64: |
-          #!/bin/bash
-          # 依存ライブラリインポート
-          sudo yum update
-          sudo yum install -y ruby wget bzip2 bzip2-devel gcc git libffi-devel make openssl openssl-devel readline readline-devel sqlite sqlite-devel zlib-devel git
+  # testEC2:
+  #   Type: AWS::EC2::Instance
+  #   Properties:
+  #     # AvailabilityZone: ap-northeast-1a
+  #     ImageId: ami-0abaa5b0faf689830  # Amazon Linux2 Latest
+  #     InstanceType: t2.micro
+  #     KeyName: !Ref KeyName
+  #     SubnetId: !Ref testSubnet
+  #     SecurityGroupIds:
+  #       - !Ref testSG
+  #     IamInstanceProfile: !Ref S3AccessInstanceProfile
+  #     UserData:
+  #       Fn::Base64: |
+  #         #!/bin/bash
+  #         # 依存ライブラリインポート
+  #         sudo yum update
+  #         sudo yum install -y ruby wget bzip2 bzip2-devel gcc git libffi-devel make openssl openssl-devel readline readline-devel sqlite sqlite-devel zlib-devel git
 
-          # CodeDeploy Agentインストール
-          cd /home/ec2-user
-          wget https://aws-codedeploy-ap-northeast-1.s3.ap-northeast-1.amazonaws.com/latest/install
-          sudo chmod +x ./install
-          ./install auto
+  #         # CodeDeploy Agentインストール
+  #         cd /home/ec2-user
+  #         wget https://aws-codedeploy-ap-northeast-1.s3.ap-northeast-1.amazonaws.com/latest/install
+  #         sudo chmod +x ./install
+  #         ./install auto
 
-          # pyenvインストール
-          sudo su -
-          git clone https://github.com/yyuu/pyenv.git ~/.pyenv
+  #         # pyenvインストール
+  #         sudo su -
+  #         git clone https://github.com/yyuu/pyenv.git ~/.pyenv
 
-          # ~/.bashrc編集
-          cat << 'EOS' >> ~/.bashrc
+  #         # ~/.bashrc編集
+  #         cat << 'EOS' >> ~/.bashrc
 
-          # Settings for pyenv
-          export PYENV_ROOT="$HOME/.pyenv"
-          export PATH="$PYENV_ROOT/bin:$PATH"
-          eval "$(pyenv init --path)"
+  #         # Settings for pyenv
+  #         export PYENV_ROOT="$HOME/.pyenv"
+  #         export PATH="$PYENV_ROOT/bin:$PATH"
+  #         eval "$(pyenv init --path)"
 
-          # Alias for Python
-          alias python="python3"
-          alias pip="pip3"
-          EOS
+  #         # Alias for Python
+  #         alias python="python3"
+  #         alias pip="pip3"
+  #         EOS
 
-          # openssl v1.1.1 インストール
-          curl https://www.openssl.org/source/openssl-1.1.1.tar.gz -o /usr/local/src/openssl-1.1.1.tar.gz
-          cd /usr/local/src
-          tar xvzf openssl-1.1.1.tar.gz
-          cd openssl-1.1.1
-          ./config --prefix=/usr/local/openssl-1.1.1 shared zlib
-          make
-          make install
-          cat << 'EOS' >> /etc/ld.so.conf.d/openssl-1.1.1.conf
-          /usr/local/openssl-1.1.1/lib/
-          EOS
-          ldconfig
-      Tags:
-        - Key: Name
-          Value: testEC2
+  #         # openssl v1.1.1 インストール
+  #         curl https://www.openssl.org/source/openssl-1.1.1.tar.gz -o /usr/local/src/openssl-1.1.1.tar.gz
+  #         cd /usr/local/src
+  #         tar xvzf openssl-1.1.1.tar.gz
+  #         cd openssl-1.1.1
+  #         ./config --prefix=/usr/local/openssl-1.1.1 shared zlib
+  #         make
+  #         make install
+  #         cat << 'EOS' >> /etc/ld.so.conf.d/openssl-1.1.1.conf
+  #         /usr/local/openssl-1.1.1/lib/
+  #         EOS
+  #         ldconfig
+  #     Tags:
+  #       - Key: Name
+  #         Value: testEC2
 
   # Elastic IP
   testEIP:
     Type: AWS::EC2::EIP
-    Properties:
-      InstanceId: !Ref testEC2
+    # Properties:
+    #   InstanceId: !Ref testEC2
 
   # IAM Role
   S3AccessRole:
@@ -186,8 +186,20 @@ Resources:
       Path: /
 
 Outputs:
-  Ec2InstanceId:
-    Description: EC2 Instance ID
+  # Ec2InstanceId:
+  #   Description: EC2 Instance ID
+  #   Export:
+  #     Name: Ec2InstanceId
+  #   Value: !Ref testEC2
+  SubnetId:
+    Description: Subnet ID
     Export:
-      Name: Ec2InstanceId
-    Value: !Ref testEC2
+      Name: SubnetId
+    Value:
+      !Ref testSubnet
+  SecurityGroupId:
+    Description: Security Group ID
+    Export:
+      Name: SecurityGroupId
+    Value:
+      !Ref testSG
