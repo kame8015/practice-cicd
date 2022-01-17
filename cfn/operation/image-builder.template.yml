@@ -167,6 +167,7 @@ Resources:
 
   # Image
   # ImageRecipe を利用して AMI を作成する指定
+  # TODO: Image -> Pipeline
   Image:
     Type: AWS::ImageBuilder::Image
     Properties:
