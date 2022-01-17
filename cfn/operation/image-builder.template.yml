@@ -21,8 +21,8 @@ Resources:
             Principal:
               Service:
                 - ec2.amazonaws.com
-              Action:
-                - sts:AssumeRole
+            Action:
+              - sts:AssumeRole
       Path: /
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
@@ -153,13 +153,13 @@ Resources:
       InstanceProfileName: !Ref Ec2IAMProfile
       InstanceTypes:
         - t2.micro
-      SecurityGroupIds:
-        - !ImportValue SecurityGroupId
-      SubnetId: !ImportValue SubnetId
+      # SecurityGroupIds:
+      #   - !ImportValue SecurityGroupId
+      # SubnetId: !ImportValue SubnetId
       TerminateInstanceOnFailure: true
-      ResourceTags:
-        - Key: Name
-          Value: testEC2
+      # ResourceTags:
+      #   - Key: Name
+      #     Value: testEC2
       Logging:
         S3Logs:
           S3BucketName: !Ref S3BucketLog
@@ -187,12 +187,42 @@ Resources:
       Value: !GetAtt Image.ImageId
       Description: !Sub ${AWS::StackName}-ami-id
 
+  # IAM
+  # SystemsManager に接続するための権限
+  Ec2IAMRoleForSSM:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-role-ssm
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  # InstanceProfile
+  Ec2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub ${AWS::StackName}-instance-profile
+      Path: /
+      Roles:
+        - !Ref Ec2IAMRoleForSSM
+
   # LaunchTemplate
   Ec2LaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
     Properties:
       LaunchTemplateName: !Sub ${AWS::StackName}-launch-template
       LaunchTemplateData:
+        IamInstanceProfile:
+          Arn: !GetAtt Ec2InstanceProfile.Arn
         BlockDeviceMappings:
           - Ebs:
               VolumeSize: 8
@@ -203,12 +233,6 @@ Resources:
         ImageId: !Sub "{{resolve:ssm:${Parameter}:1}}"
         InstanceType: t2.micro
         KeyName: !Ref KeyName
-      # LaunchTemplateData:
-      #   IamInstanceProfile:
-      #     Arn: !GetAtt Ec2IAMProfile.Arn
-      #   ImageId: !Sub {{resolve:ssm:${Parameter}:1}}
-      #   InstanceType: t2.micro
-      #   KeyName: !Ref KeyName
 
   # AutoScalingGroup
   # ImageBuilder で作成した AMI を利用して、EC2 インスタンスを1台起動する
@@ -220,7 +244,7 @@ Resources:
         LaunchTemplateId: !Ref Ec2LaunchTemplate
         Version: !GetAtt Ec2LaunchTemplate.LatestVersionNumber
       VPCZoneIdentifier:
-        - !ImportValue testSubnet
+        - !ImportValue SubnetId
       # AvailabilityZones:  # 指定しない
       DesiredCapacity: 1  # 希望数
       MinSize: 0  # 最小数
