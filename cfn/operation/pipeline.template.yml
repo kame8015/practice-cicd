@@ -1,0 +1,439 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Pipeline Template
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Base Settings
+        Parameters:
+          - BaseAmiId
+
+      - Label:
+          default: Source(GitHub) information
+        Parameters:
+          - GitHubOwner
+          - GitHubRepositoryName
+          - GitHubBranchName
+          - GitHubOAuthToken
+
+Parameters:
+  BaseAmiId:
+    Description: Base AMI ID
+    Type: String
+
+  GitHubOwner:
+    Description: GitHub Owner
+    Type: String
+
+  GitHubRepositoryName:
+    Description: GitHub Repository Name
+    Type: String
+
+  GitHubBranchName:
+    Description: GitHub Target Branch Name
+    Type: String
+
+  GitHubOAuthToken:
+    Description: GitHub OAuth Token
+    Type: String
+    NoEcho: true
+
+Resources:
+  # IAM Role for Lambda
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: LambdaAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: BasicExecutionAccess
+                Effect: Allow
+                Action:
+                  - iam:GetRole
+                  - iam:PassRole
+                Resource: "*"
+              - Sid: CodePipelineFullAccess
+                Effect: Allow
+                Action:
+                  - codepipeline:*
+                Resource: "*"
+              - Sid: CloudWatchLogsAccess
+                Effect: Allow
+                Action:
+                  - logs:PutLogEvents
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                Resource: "*"
+              - Sid: ImageBuilderAccess
+                Effect: Allow
+                Action:
+                  - imagebuilder:GetImage
+                  - imagebuilder:StartPipelineExecution
+                Resource: "*"
+
+  # Lambda StartPipelineFunction
+  StartPipelineFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Role: !GetAtt LambdaRole.Arn
+      Description: Start ImageBuilder Pipeline Function
+      FunctionName: StartPipeline
+      Handler: index.lambda_handler
+      Runtime: python3.9
+      Code:
+        ZipFile: |
+          import boto3
+          import logging
+          import json
+          import traceback
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          codepipeline_client = boto3.client("codepipeline")
+          imagebuilder_client = boto3.client("imagebuilder")
+
+
+          # 正常終了
+          def put_job_success(job_id):
+              logger.info("Putting jub success")
+              codepipeline_client.put_job_success_result(jobId=job_id)
+
+
+          # 処理継続/CodePipelineに継続トークン返却
+          def continue_job_later(job_id, image_builder_version_arn):
+              logger.info("Putting job continuation")
+              continuation_token = json.dumps({"ImageBuildVersionArn": image_builder_version_arn})
+              codepipeline_client.put_job_success_result(
+                  jobId=job_id, continuation_token=continuation_token
+              )
+
+
+          # 異常終了
+          def put_job_failure(job_id, err):
+              logger.error("Putting job failed")
+              message = str(err)
+              codepipeline_client.put_job_failure_result(
+                  jobId=job_id, failureDetails={"type": "JobFailed", "message": message}
+              )
+
+
+          def lambda_handler(event, context):
+              try:
+                  job_id = event["CodePipeline.job"]["id"]
+                  job_data = event["CodePipeline.job"]["data"]
+
+                  # CodePipelineユーザパラメータ取得
+                  user_parameters = json.loads(
+                      job_data["actionConfiguration"]["configuration"]["UserParameters"]
+                  )
+                  image_pipeline_arn = user_parameters["imageBuildVersionArn"]
+
+                  logger.info(f"ImagePipelineArn is {image_pipeline_arn}")
+                  logger.info(f"CodePipeline Event is {event['CodePipeline.job']}")
+
+                  # 継続トークン有無確認
+                  if "continuationToken" in job_data:
+                      continuation_token = json.loads(job_data["continuationToken"])
+                      image_build_version_arn = continuation_token["ImageBuildVersionArn"]
+
+                      logger.info(image_build_version_arn)
+
+                      # ビルドの状態取得
+                      response = imagebuilder_client.get_image(
+                          imageBuildVersionArn=image_build_version_arn
+                      )
+                      build_status = response["image"]["state"]["status"]
+                      logger.info(build_status)
+
+                      if build_status == "AVAILABLE":
+                          put_job_success(job_id)
+                      elif build_status == "FAILED":
+                          err_msg = "Build Error"
+                          put_job_failure(job_id, err_msg)
+                      else:
+                          continue_job_later(job_id, image_build_version_arn)
+                  else:
+                      # ビルド実行
+                      response = imagebuilder_client.start_image_pipeline_execution(
+                          imagePipelineArn=image_pipeline_arn
+                      )
+                      image_build_version_arn = response["imageBuildVersionArn"]
+                      logger.info(f"imageBuildVersionArn is {image_build_version_arn}")
+                      continue_job_later(job_id, image_build_version_arn)
+
+              except Exception as err:
+                  logger.error(f"Function exception: {err}")
+                  traceback.print_exc()
+                  put_job_failure(job_id, f"Function exception: {err}")
+
+              logger.info("Function complete")
+              return "Complete"
+
+  # CloudWatchLogs StartPipelineFunction
+  StartPipelineFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 30
+      LogGroupName: !Sub /aws/lambda/${StartPipelineFunction}
+
+  ##############################
+  # ImageBuilder 関連
+  ##############################
+  # IAM Role
+  # ImageBuilder が使用する
+  ImageBuilderIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/EC2InstanceProfileForImageBuilder
+
+  # IAM Policy
+  # ImageBuilder ログ用バケットへのアクセス権限
+  ImageBuilderPolicies:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: ImageBuilderPolicies
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:List*
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - s3:*
+            Resource:
+              - !Sub arn:aws:s3:::${ImageBuilderLogBucket}
+              - !Sub arn:aws:s3:::${ImageBuilderLogBucket}/*
+      Roles:
+        - !Ref ImageBuilderIAMRole
+
+  # InstanceProfile
+  ImageBuilderProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref ImageBuilderIAMRole
+
+  # S3
+  # ImageBuilder のログ出力先
+  ImageBuilderLogBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-imagebuilder-log
+      LifecycleConfiguration:
+        Rules:
+          - Id: AutoDelete
+            Status: Enabled
+            ExpirationInDays: 14
+
+  # BuildComponent
+  BuildComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: !Sub ${AWS::StackName}-build
+      Version: 1.0.0
+      Platform: Linux
+      Data: !Sub |
+        name: Download Source
+        description: Download Source from ArtifactStore Bucket
+        schemaVersion: 1.0
+
+        phases:
+          - name: downloadSource
+            action: S3Download
+            inputs:
+              - source: s3://${ArtifactStoreBucket}
+                destination: /opt/app
+
+  # ImageRecipe
+  ImageRecipe:
+    Type: AWS::ImageBuilder::ImageRecipe
+    Properties:
+      Name: !Sub ${AWS::StackName}-recipe
+      Version: 1.0.0
+      ParentImage: !Ref BaseAmiId
+      Components:
+        - ComponentArn: !Ref BuildComponent
+
+  # InfrastructureConfiguration
+  # デフォルトVPCを使用
+  InfrastructureConfiguration:
+    Type: AWS::ImageBuilder::InfrastructureConfiguration
+    Properties:
+      Name: !Sub ${AWS::StackName}-infrastructure
+      InstanceProfileName: !Ref ImageBuilderProfile
+      InstanceTypes:
+        - t2.micro
+      TerminateInstanceOnFailure: true
+      Logging:
+        S3Logs:
+          S3BucketName: !Ref ImageBuilderLogBucket
+          S3KeyPrefix: !Sub ${AWS::StackName}
+
+  # ImagePipeline
+  ImagePipeline:
+    Type: AWS::ImageBuilder::ImagePipeline
+    Properties:
+      Name: !Sub ${AWS::StackName}-pipeline
+      InfrastructureConfigurationArn: !GetAtt InfrastructureConfiguration.Arn
+      ImageTestsConfiguration:
+        ImageTestsEnabled: true
+        TimeoutMinutes: 60
+      Schedule:
+        PipelineExecutionStartCondition: EXPRESSION_MATCH_ONLY
+        # ScheduleExpression:
+      Status: ENABLED
+
+  ##############################
+  # AutoScalingGroup や LaunchTemplate 関連
+  ##############################
+  # TODO: これは別テンプレートで管理する
+
+  ##############################
+  # CodePipeline 関連
+  ##############################
+  # S3 ArtifactStore Bucket
+  ArtifactStoreBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+
+  # CodePipeline Role
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+                - cloudformation.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: CodePipelineAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: ArtifactStoreFullAccess
+                Effect: Allow
+                Action: s3:*
+                Resource:
+                  - !Sub arn:aws:s3:::${ArtifactStoreBucket}
+                  - !Sub arn:aws:s3:::${ArtifactStoreBucket}/*
+              - Sid: PipelineAccess
+                Effect: Allow
+                Action:
+                  - cloudformation:*
+                  - s3:GetBucketLocation
+                  - s3:ListAllMyBuckets
+                  - lambda:InvokeFunction
+                  - lambda:ListFunctions
+                  - iam:PassRole
+                Resource: "*"
+
+  # CodePipeline Pipeline
+  DeployPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub ${AWS::StackName}-pipeline
+      RoleArn: !GetAtt PipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactStoreBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: downloadSource
+              RunOrder: 1
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Provider: GitHub
+                Version: 1
+              Configuration:
+                Owner: !Ref GitHubOwner
+                Repo: !Ref GitHubRepositoryName
+                Branch: !Ref GitHubBranchName
+                OAuthToken: !Ref GitHubOAuthToken
+              OutputArtifacts:
+                - Name: SourceOutput
+
+        # - Name: Test
+        #   Actions:
+        #     - Name: testInCodeBuild
+        #       RunOrder: 1
+        #       ActionTypeId:
+        #         Category: Test
+        #         Owner: AWS
+        #         Provider: CodeBuild
+        #         Version: 1
+        #       Configuration:
+        #         ProjectName: !Ref CodeBuildProject
+        #       InputArtifacts:
+        #         - Name: SourceOutput
+        #       OutputArtifacts:
+        #         - Name: TestOutput
+
+        - Name: Approval
+          Actions:
+            - Name: approveDeployment
+              ActionTypeId:
+                Category: Approval
+                Owner: AWS
+                Provider: Manual
+                Version: 1
+
+        - Name: Build
+          Actions:
+            - Name: startImagePipeline
+              ActionTypeId:
+                Category: Invoke
+                Owner: AWS
+                Provider: Lambda
+                Version: 1
+              Configuration:
+                FunctionName: !Ref StartPipelineFunction
+                UserParameters: !Sub '{"imageBuildVersionArn": "${ImagePipeline}"}'
+
+        # - Name: Deploy
+        #   Actions:
+        #     - Name: attachAutoScalingGroup
+        #       ActionTypeId:
+        #         Category: Deploy
+        #         Owner: AWS
+        #         Provider: CloudFormation
+        #         Version: 1
+        #       Configuration:
+        #         ActionMode: CREATE_UPDATE
